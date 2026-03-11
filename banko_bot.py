@@ -13,7 +13,8 @@ ADMIN_ID = int(os.environ.get("ADMIN_ID", "8480843841"))
 API_KEY = os.environ.get("API_KEY", "0c0c1ad20573b309924dd3d7b1bc3e62")
 API_URL = "https://v3.football.api-sports.io"
 
-CONFIDENCE_THRESHOLD = 72
+THRESHOLD_15 = 70
+THRESHOLD_25 = 70
 CACHE_TIME = 43200
 analysis_cache = {}
 shown_banko = set()
@@ -430,7 +431,7 @@ def analyze(id1, name1, id2, name2):
 def confidence_label(prob):
     if prob >= 80:
         return "YUKSEK GUVEN - GUVENLI"
-    if prob >= 72:
+    if prob >= 70:
         return "IYI GUVEN - GUVENLI"
     return "ORTA GUVEN"
 
@@ -444,12 +445,12 @@ def format_result(result, league="", kickoff=""):
     league_line = "Lig: " + league + "\n" if league else ""
     ko_line = "Saat: " + kickoff + "\n" if kickoff else ""
 
-    if o15 >= CONFIDENCE_THRESHOLD:
+    if o15 >= THRESHOLD_15:
         v15 = "1.5 UST " + str(o15) + "% [ " + confidence_label(o15) + " ]"
     else:
         v15 = "1.5 ALT " + str(u15) + "% [ DUSUK GOL BEKLENTISI ]"
 
-    if o25 >= CONFIDENCE_THRESHOLD:
+    if o25 >= THRESHOLD_25:
         v25 = "2.5 UST " + str(o25) + "% [ " + confidence_label(o25) + " ]"
     else:
         v25 = "2.5 ALT " + str(u25) + "% [ DUSUK GOL BEKLENTISI ]"
@@ -483,7 +484,7 @@ def find_banko():
             continue
         if result["reliability"] == "Dusuk":
             continue
-        if result["o15"] >= CONFIDENCE_THRESHOLD or result["o25"] >= CONFIDENCE_THRESHOLD:
+        if result["o15"] >= THRESHOLD_15 or result["o25"] >= THRESHOLD_25:
             try:
                 ko = datetime.fromisoformat(fix["kickoff"].replace("Z", "+00:00"))
                 ko_str = ko.strftime("%H:%M")
@@ -521,7 +522,7 @@ async def banko_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         fix, result, ko_str = find_banko()
         if not fix or not result:
             await wait.edit_text(
-                "Bugun %72+ guvenli mac bulunamadi.\n/banko ile tekrar dene.",
+                "Bugun %70+ guvenli mac bulunamadi.\n/banko ile tekrar dene.",
                 reply_markup=InlineKeyboardMarkup([[
                     InlineKeyboardButton("Tekrar Dene", callback_data="banko")
                 ]])
@@ -572,7 +573,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             fix, result, ko_str = find_banko()
             if not fix or not result:
                 await query.edit_message_text(
-                    "Bugun %72+ guvenli mac bulunamadi.\nTekrar dene.",
+                    "Bugun %70+ guvenli mac bulunamadi.\nTekrar dene.",
                     reply_markup=InlineKeyboardMarkup([[
                         InlineKeyboardButton("Tekrar Dene", callback_data="banko")
                     ]])

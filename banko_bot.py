@@ -300,9 +300,7 @@ def get_todays_fixtures():
     year = datetime.now().year
     all_fixtures = []
     seen_ids = set()
-
     league_order = list(PRIORITY_LEAGUES.keys()) + [lid for lid in ALL_LEAGUES if lid not in PRIORITY_LEAGUES]
-
     for league_id in league_order:
         league_name = ALL_LEAGUES.get(league_id, str(league_id))
         for season in [year, year - 1]:
@@ -419,9 +417,7 @@ def analyze(id1, name1, id2, name2):
         "h": name1,
         "a": name2,
         "o15": o15,
-        "u15": 100 - o15,
         "o25": o25,
-        "u25": 100 - o25,
         "reliability": reliability,
     }
     analysis_cache[key] = {"data": result, "time": now}
@@ -439,29 +435,22 @@ def confidence_label(prob):
 def format_result(result, league="", kickoff=""):
     o15 = result["o15"]
     o25 = result["o25"]
-    u15 = result["u15"]
-    u25 = result["u25"]
 
     league_line = "Lig: " + league + "\n" if league else ""
     ko_line = "Saat: " + kickoff + "\n" if kickoff else ""
 
+    lines = ""
     if o15 >= THRESHOLD_15:
-        v15 = "1.5 UST " + str(o15) + "% [ " + confidence_label(o15) + " ]"
-    else:
-        v15 = "1.5 ALT " + str(u15) + "% [ DUSUK GOL BEKLENTISI ]"
-
+        lines += "1.5 UST " + str(o15) + "% [ " + confidence_label(o15) + " ]\n\n"
     if o25 >= THRESHOLD_25:
-        v25 = "2.5 UST " + str(o25) + "% [ " + confidence_label(o25) + " ]"
-    else:
-        v25 = "2.5 ALT " + str(u25) + "% [ DUSUK GOL BEKLENTISI ]"
+        lines += "2.5 UST " + str(o25) + "% [ " + confidence_label(o25) + " ]\n\n"
 
     msg = "MAC ANALIZI BANKO\n"
     msg += league_line
     msg += "Ev: " + result["h"] + "\n"
     msg += "Dep: " + result["a"] + "\n"
     msg += ko_line + "\n"
-    msg += v15 + "\n\n"
-    msg += v25 + "\n\n"
+    msg += lines
     msg += "Guvenilirlik: " + result["reliability"]
     return msg
 
@@ -484,7 +473,9 @@ def find_banko():
             continue
         if result["reliability"] == "Dusuk":
             continue
-        if result["o15"] >= THRESHOLD_15 or result["o25"] >= THRESHOLD_25:
+        o15 = result["o15"]
+        o25 = result["o25"]
+        if o15 >= THRESHOLD_15 and o25 >= THRESHOLD_25:
             try:
                 ko = datetime.fromisoformat(fix["kickoff"].replace("Z", "+00:00"))
                 ko_str = ko.strftime("%H:%M")
@@ -522,7 +513,7 @@ async def banko_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         fix, result, ko_str = find_banko()
         if not fix or not result:
             await wait.edit_text(
-                "Bugun %70+ guvenli mac bulunamadi.\n/banko ile tekrar dene.",
+                "Bugun 1.5 UST ve 2.5 UST ikisi birden %70+ olan mac bulunamadi.\n/banko ile tekrar dene.",
                 reply_markup=InlineKeyboardMarkup([[
                     InlineKeyboardButton("Tekrar Dene", callback_data="banko")
                 ]])
@@ -573,7 +564,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             fix, result, ko_str = find_banko()
             if not fix or not result:
                 await query.edit_message_text(
-                    "Bugun %70+ guvenli mac bulunamadi.\nTekrar dene.",
+                    "Bugun 1.5 UST ve 2.5 UST ikisi birden %70+ olan mac bulunamadi.\nTekrar dene.",
                     reply_markup=InlineKeyboardMarkup([[
                         InlineKeyboardButton("Tekrar Dene", callback_data="banko")
                     ]])

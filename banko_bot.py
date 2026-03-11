@@ -62,21 +62,17 @@ ALL_LEAGUES = {
     45: "FA Cup",
     140: "La Liga",
     141: "Segunda Division",
-    142: "Copa del Rey",
     135: "Serie A",
     136: "Serie B",
     61: "Ligue 1",
     62: "Ligue 2",
     203: "Super Lig",
     204: "1. Lig Turkey",
-    205: "2. Lig Turkey",
     94: "Primeira Liga",
     95: "Segunda Liga",
     144: "Jupiler Pro League",
     179: "Scottish Premiership",
-    180: "Scottish Championship",
     235: "Premier League Russia",
-    236: "FNL Russia",
     207: "Super League Switzerland",
     197: "Super League Greece",
     106: "Ekstraklasa",
@@ -86,7 +82,6 @@ ALL_LEAGUES = {
     333: "Premier League Ukraine",
     271: "OTP Bank Liga Hungary",
     345: "Czech Liga",
-    172: "First League Bulgaria",
     357: "League of Ireland",
     98: "J1 League",
     99: "J2 League",
@@ -120,7 +115,7 @@ def safe_request(url):
     headers = {"x-apisports-key": API_KEY}
     for _ in range(3):
         try:
-            r = requests.get(url, headers=headers, timeout=10)
+            r = requests.get(url, headers=headers, timeout=15)
             if r.status_code == 200:
                 return r.json()
         except Exception:
@@ -299,6 +294,49 @@ def get_h2h(id1, id2):
     return matches
 
 
+def get_todays_fixtures():
+    today = date.today().strftime("%Y-%m-%d")
+    year = datetime.now().year
+    all_fixtures = []
+    seen_ids = set()
+
+    league_order = list(PRIORITY_LEAGUES.keys()) + [lid for lid in ALL_LEAGUES if lid not in PRIORITY_LEAGUES]
+
+    for league_id in league_order:
+        league_name = ALL_LEAGUES.get(league_id, str(league_id))
+        for season in [year, year - 1]:
+            url = API_URL + "/fixtures?date=" + today + "&league=" + str(league_id) + "&season=" + str(season)
+            r = safe_request(url)
+            if not r:
+                continue
+            matches = r.get("response", [])
+            if not matches:
+                continue
+            added = False
+            for m in matches:
+                fid = m["fixture"]["id"]
+                if fid in seen_ids:
+                    continue
+                status = m["fixture"]["status"]["short"]
+                if status not in ["NS", "TBD"]:
+                    continue
+                seen_ids.add(fid)
+                added = True
+                all_fixtures.append({
+                    "league": league_name,
+                    "home_id": m["teams"]["home"]["id"],
+                    "home_name": m["teams"]["home"]["name"],
+                    "away_id": m["teams"]["away"]["id"],
+                    "away_name": m["teams"]["away"]["name"],
+                    "kickoff": m["fixture"]["date"],
+                    "fid": fid,
+                })
+            if added:
+                break
+        time.sleep(0.2)
+    return all_fixtures
+
+
 def calc_lambda(gen6, venue6):
     gen_s = weighted_avg([m["scored"] for m in gen6])
     gen_c = weighted_avg([m["conceded"] for m in gen6])
@@ -361,11 +399,6 @@ def analyze(id1, name1, id2, name2):
     o15 = int(max(5, min(95, o15 * 100)))
     o25 = int(max(5, min(95, o25 * 100)))
 
-    ho15 = sum(1 for m in home_gen if m["gh"] + m["ga"] > 1)
-    ao15 = sum(1 for m in away_gen if m["gh"] + m["ga"] > 1)
-    ho25 = sum(1 for m in home_gen if m["gh"] + m["ga"] > 2)
-    ao25 = sum(1 for m in away_gen if m["gh"] + m["ga"] > 2)
-
     warns = []
     if len(home_gen) < 4:
         warns.append("low_home")
@@ -384,20 +417,11 @@ def analyze(id1, name1, id2, name2):
     result = {
         "h": name1,
         "a": name2,
-        "lh": round(lh, 2),
-        "la": round(la, 2),
-        "lam": round(lam, 2),
         "o15": o15,
         "u15": 100 - o15,
         "o25": o25,
         "u25": 100 - o25,
-        "ho15": ho15,
-        "ao15": ao15,
-        "ho25": ho25,
-        "ao25": ao25,
-        "h2h_count": len(h2h),
         "reliability": reliability,
-        "warns": warns,
     }
     analysis_cache[key] = {"data": result, "time": now}
     return result
@@ -430,65 +454,15 @@ def format_result(result, league="", kickoff=""):
     else:
         v25 = "2.5 ALT " + str(u25) + "% [ DUSUK GOL BEKLENTISI ]"
 
-    h2h_line = "H2H 2025+: " + str(result["h2h_count"]) + " mac\n" if result["h2h_count"] > 0 else "H2H 2025+: Veri yok\n"
-
-    msg = "━━━━━━━━━━━━━━━━━━━━━━\n"
-    msg += "  MAC ANALIZI BANKO\n"
-    msg += "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+    msg = "MAC ANALIZI BANKO\n"
     msg += league_line
     msg += "Ev: " + result["h"] + "\n"
     msg += "Dep: " + result["a"] + "\n"
     msg += ko_line + "\n"
-    msg += "xG: Ev L" + str(result["lh"]) + "  Dep L" + str(result["la"]) + "  Toplam " + str(result["lam"]) + "\n\n"
-    msg += "━━━━━━━━━━━━━━━━━━━━━━\n\n"
-    msg += v15 + "\n"
-    msg += "Son 6: Ev " + str(result["ho15"]) + "/6  Dep " + str(result["ao15"]) + "/6\n\n"
-    msg += v25 + "\n"
-    msg += "Son 6: Ev " + str(result["ho25"]) + "/6  Dep " + str(result["ao25"]) + "/6\n\n"
-    msg += "━━━━━━━━━━━━━━━━━━━━━━\n"
-    msg += h2h_line
-    msg += "Guvenilirlik: " + result["reliability"] + "\n"
-    msg += "━━━━━━━━━━━━━━━━━━━━━━"
+    msg += v15 + "\n\n"
+    msg += v25 + "\n\n"
+    msg += "Guvenilirlik: " + result["reliability"]
     return msg
-
-
-def get_todays_fixtures():
-    today = date.today().strftime("%Y-%m-%d")
-    year = datetime.now().year
-    all_fixtures = []
-    seen_ids = set()
-
-    league_order = list(PRIORITY_LEAGUES.keys()) + [lid for lid in ALL_LEAGUES if lid not in PRIORITY_LEAGUES]
-
-    for league_id in league_order:
-        league_name = ALL_LEAGUES.get(league_id, str(league_id))
-        for season in [year, year - 1]:
-            url = API_URL + "/fixtures?date=" + today + "&league=" + str(league_id) + "&season=" + str(season)
-            r = safe_request(url)
-            if not r:
-                continue
-            matches = r.get("response", [])
-            if not matches:
-                continue
-            for m in matches:
-                fid = m["fixture"]["id"]
-                if fid in seen_ids:
-                    continue
-                if m["fixture"]["status"]["short"] not in ["NS", "TBD"]:
-                    continue
-                seen_ids.add(fid)
-                all_fixtures.append({
-                    "league": league_name,
-                    "home_id": m["teams"]["home"]["id"],
-                    "home_name": m["teams"]["home"]["name"],
-                    "away_id": m["teams"]["away"]["id"],
-                    "away_name": m["teams"]["away"]["name"],
-                    "kickoff": m["fixture"]["date"],
-                    "fid": fid,
-                })
-            break
-        time.sleep(0.2)
-    return all_fixtures
 
 
 def find_banko():
@@ -523,8 +497,8 @@ def find_banko():
 def banko_keyboard():
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("Tekrar Analiz", callback_data="banko"),
-            InlineKeyboardButton("Botu Kapat", callback_data="dur"),
+            InlineKeyboardButton("Tekrar Analiz /banko", callback_data="banko"),
+            InlineKeyboardButton("Botu Kapat /dur", callback_data="dur"),
         ]
     ])
 
@@ -532,14 +506,7 @@ def banko_keyboard():
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
-    await update.message.reply_text(
-        "Otomatik /banko Mac Analizi\n\n"
-        "%72+ guven duvari\n"
-        "Tum dunya ligleri\n"
-        "Bol gollu ligler oncelikli\n\n"
-        "/banko - Analiz baslat\n"
-        "/dur   - Botu durdur"
-    )
+    await update.message.reply_text("Otomatik /banko Mac Analizi")
 
 
 async def banko_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -547,20 +514,14 @@ async def banko_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
 
-    if not bot_active:
-        bot_active = True
-
-    wait = await update.message.reply_text(
-        "Bultendeki maclar analiz ediliyor...\n"
-        "Bol gollu liglerden basliyorum."
-    )
+    bot_active = True
+    wait = await update.message.reply_text("Bultendeki maclar analiz ediliyor...")
 
     try:
         fix, result, ko_str = find_banko()
         if not fix or not result:
             await wait.edit_text(
-                "Bugun %72+ guvenli mac bulunamadi.\n\n"
-                "/banko ile tekrar dene.",
+                "Bugun %72+ guvenli mac bulunamadi.\n/banko ile tekrar dene.",
                 reply_markup=InlineKeyboardMarkup([[
                     InlineKeyboardButton("Tekrar Dene", callback_data="banko")
                 ]])
@@ -606,16 +567,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if query.data == "banko":
         bot_active = True
-        await query.edit_message_text(
-            "Bultendeki maclar analiz ediliyor...\n"
-            "Bol gollu liglerden basliyorum."
-        )
+        await query.edit_message_text("Bultendeki maclar analiz ediliyor...")
         try:
             fix, result, ko_str = find_banko()
             if not fix or not result:
                 await query.edit_message_text(
-                    "Bugun %72+ guvenli mac bulunamadi.\n\n"
-                    "Tekrar dene.",
+                    "Bugun %72+ guvenli mac bulunamadi.\nTekrar dene.",
                     reply_markup=InlineKeyboardMarkup([[
                         InlineKeyboardButton("Tekrar Dene", callback_data="banko")
                     ]])

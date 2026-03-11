@@ -4,7 +4,6 @@ import math
 import random
 import os
 from datetime import datetime, date, timezone, timedelta
-import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
@@ -13,12 +12,10 @@ ADMIN_ID = int(os.environ.get("ADMIN_ID", "8480843841"))
 API_KEY = os.environ.get("API_KEY", "0c0c1ad20573b309924dd3d7b1bc3e62")
 API_URL = "https://v3.football.api-sports.io"
 
-THRESHOLD_15 = 70
-THRESHOLD_25 = 70
+THRESHOLD = 70
 CACHE_TIME = 43200
 analysis_cache = {}
 shown_banko = set()
-bot_active = True
 
 PRIORITY_LEAGUES = {
     304: "Singapore Premier League",
@@ -205,18 +202,11 @@ def get_last6(team_id):
         if gh is None or ga is None:
             continue
         is_home = m["teams"]["home"]["id"] == team_id
-        ht_h = m.get("score", {}).get("halftime", {}).get("home") or 0
-        ht_a = m.get("score", {}).get("halftime", {}).get("away") or 0
         matches.append({
             "scored": gh if is_home else ga,
             "conceded": ga if is_home else gh,
             "gh": gh,
             "ga": ga,
-            "is_home": is_home,
-            "ht_scored": ht_h if is_home else ht_a,
-            "ht_conceded": ht_a if is_home else ht_h,
-            "sh_scored": (gh - ht_h) if is_home else (ga - ht_a),
-            "sh_conceded": (ga - ht_a) if is_home else (gh - ht_h),
         })
     return matches
 
@@ -236,23 +226,17 @@ def get_venue6(team_id, venue="home"):
         ga = m["goals"]["away"]
         if gh is None or ga is None:
             continue
-        ht_h = m.get("score", {}).get("halftime", {}).get("home") or 0
-        ht_a = m.get("score", {}).get("halftime", {}).get("away") or 0
         matches.append({
             "scored": gh if is_home else ga,
             "conceded": ga if is_home else gh,
-            "ht_scored": ht_h if is_home else ht_a,
-            "ht_conceded": ht_a if is_home else ht_h,
-            "sh_scored": (gh - ht_h) if is_home else (ga - ht_a),
-            "sh_conceded": (ga - ht_a) if is_home else (gh - ht_h),
         })
         if len(matches) >= 6:
             break
     return matches
 
 
-def get_xg(team_id, last=6):
-    r = safe_request(API_URL + "/fixtures?team=" + str(team_id) + "&last=" + str(last) + "&status=FT")
+def get_xg(team_id):
+    r = safe_request(API_URL + "/fixtures?team=" + str(team_id) + "&last=6&status=FT")
     if not r:
         return 0.0
     fixture_ids = [m["fixture"]["id"] for m in r.get("response", [])]
@@ -316,8 +300,7 @@ def get_todays_fixtures():
                 fid = m["fixture"]["id"]
                 if fid in seen_ids:
                     continue
-                status = m["fixture"]["status"]["short"]
-                if status not in ["NS", "TBD"]:
+                if m["fixture"]["status"]["short"] not in ["NS", "TBD"]:
                     continue
                 seen_ids.add(fid)
                 added = True
@@ -341,9 +324,7 @@ def calc_lambda(gen6, venue6):
     gen_c = weighted_avg([m["conceded"] for m in gen6])
     ven_s = weighted_avg([m["scored"] for m in venue6]) if venue6 else gen_s
     ven_c = weighted_avg([m["conceded"] for m in venue6]) if venue6 else gen_c
-    scored = ven_s * 0.65 + gen_s * 0.35
-    conceded = ven_c * 0.65 + gen_c * 0.35
-    return scored, conceded
+    return ven_s * 0.65 + gen_s * 0.35, ven_c * 0.65 + gen_c * 0.35
 
 
 def analyze(id1, name1, id2, name2):
@@ -355,12 +336,12 @@ def analyze(id1, name1, id2, name2):
 
     home_gen = get_last6(id1)
     away_gen = get_last6(id2)
-    home_venue = get_venue6(id1, "home")
-    away_venue = get_venue6(id2, "away")
 
     if len(home_gen) < 3 or len(away_gen) < 3:
         return None
 
+    home_venue = get_venue6(id1, "home")
+    away_venue = get_venue6(id2, "away")
     home_xg = get_xg(id1)
     away_xg = get_xg(id2)
 
@@ -398,17 +379,17 @@ def analyze(id1, name1, id2, name2):
     o15 = int(max(5, min(95, o15 * 100)))
     o25 = int(max(5, min(95, o25 * 100)))
 
-    warns = []
+    warns = 0
     if len(home_gen) < 4:
-        warns.append("low_home")
+        warns += 1
     if len(away_gen) < 4:
-        warns.append("low_away")
+        warns += 1
     if not h2h:
-        warns.append("no_h2h")
+        warns += 1
 
-    if len(warns) == 0:
+    if warns == 0:
         reliability = "Yuksek"
-    elif len(warns) == 1:
+    elif warns == 1:
         reliability = "Orta"
     else:
         reliability = "Dusuk"
@@ -427,30 +408,25 @@ def analyze(id1, name1, id2, name2):
 def confidence_label(prob):
     if prob >= 80:
         return "YUKSEK GUVEN - GUVENLI"
-    if prob >= 70:
-        return "IYI GUVEN - GUVENLI"
-    return "ORTA GUVEN"
+    return "IYI GUVEN - GUVENLI"
 
 
 def format_result(result, league="", kickoff=""):
     o15 = result["o15"]
     o25 = result["o25"]
 
-    league_line = "Lig: " + league + "\n" if league else ""
-    ko_line = "Saat: " + kickoff + "\n" if kickoff else ""
-
-    lines = ""
-    if o15 >= THRESHOLD_15:
-        lines += "1.5 UST " + str(o15) + "% [ " + confidence_label(o15) + " ]\n\n"
-    if o25 >= THRESHOLD_25:
-        lines += "2.5 UST " + str(o25) + "% [ " + confidence_label(o25) + " ]\n\n"
-
     msg = "MAC ANALIZI BANKO\n"
-    msg += league_line
+    if league:
+        msg += "Lig: " + league + "\n"
     msg += "Ev: " + result["h"] + "\n"
     msg += "Dep: " + result["a"] + "\n"
-    msg += ko_line + "\n"
-    msg += lines
+    if kickoff:
+        msg += "Saat: " + kickoff + "\n"
+    msg += "\n"
+    if o15 >= THRESHOLD:
+        msg += "1.5 UST " + str(o15) + "% [ " + confidence_label(o15) + " ]\n\n"
+    if o25 >= THRESHOLD:
+        msg += "2.5 UST " + str(o25) + "% [ " + confidence_label(o25) + " ]\n\n"
     msg += "Guvenilirlik: " + result["reliability"]
     return msg
 
@@ -475,7 +451,7 @@ def find_banko():
             continue
         o15 = result["o15"]
         o25 = result["o25"]
-        if o15 >= THRESHOLD_15 and o25 >= THRESHOLD_25:
+        if o15 >= THRESHOLD and o25 >= THRESHOLD:
             try:
                 ko = datetime.fromisoformat(fix["kickoff"].replace("Z", "+00:00"))
                 ko_str = ko.strftime("%H:%M")
@@ -502,76 +478,48 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def banko_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global bot_active
     if update.effective_user.id != ADMIN_ID:
         return
-
-    bot_active = True
     wait = await update.message.reply_text("Bultendeki maclar analiz ediliyor...")
-
     try:
         fix, result, ko_str = find_banko()
         if not fix or not result:
             await wait.edit_text(
                 "Bugun 1.5 UST ve 2.5 UST ikisi birden %70+ olan mac bulunamadi.\n/banko ile tekrar dene.",
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("Tekrar Dene", callback_data="banko")
-                ]])
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Tekrar Dene", callback_data="banko")]])
             )
             return
-
-        msg = format_result(result, fix["league"], ko_str)
-        await wait.edit_text(msg, reply_markup=banko_keyboard())
-
+        await wait.edit_text(format_result(result, fix["league"], ko_str), reply_markup=banko_keyboard())
     except Exception as e:
         await wait.edit_text("Hata: " + str(e))
 
 
 async def dur_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global bot_active
     if update.effective_user.id != ADMIN_ID:
         return
-    bot_active = False
-    await update.message.reply_text(
-        "Bot durduruldu. API cekimi durduruldu.\n"
-        "Tasarruf modu aktif.\n\n"
-        "/banko ile yeniden baslat."
-    )
+    await update.message.reply_text("Bot durduruldu.\n/banko ile yeniden baslat.")
 
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global bot_active
     query = update.callback_query
     if query.from_user.id != ADMIN_ID:
         await query.answer("Yetkisiz.")
         return
-
     await query.answer()
-
     if query.data == "dur":
-        bot_active = False
-        await query.edit_message_text(
-            "Bot durduruldu. API cekimi durduruldu.\n"
-            "Tasarruf modu aktif.\n\n"
-            "/banko ile yeniden baslat."
-        )
+        await query.edit_message_text("Bot durduruldu.\n/banko ile yeniden baslat.")
         return
-
     if query.data == "banko":
-        bot_active = True
         await query.edit_message_text("Bultendeki maclar analiz ediliyor...")
         try:
             fix, result, ko_str = find_banko()
             if not fix or not result:
                 await query.edit_message_text(
                     "Bugun 1.5 UST ve 2.5 UST ikisi birden %70+ olan mac bulunamadi.\nTekrar dene.",
-                    reply_markup=InlineKeyboardMarkup([[
-                        InlineKeyboardButton("Tekrar Dene", callback_data="banko")
-                    ]])
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Tekrar Dene", callback_data="banko")]])
                 )
                 return
-            msg = format_result(result, fix["league"], ko_str)
-            await query.edit_message_text(msg, reply_markup=banko_keyboard())
+            await query.edit_message_text(format_result(result, fix["league"], ko_str), reply_markup=banko_keyboard())
         except Exception as e:
             await query.edit_message_text("Hata: " + str(e))
 

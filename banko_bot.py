@@ -10,7 +10,7 @@ Application, CommandHandler, CallbackQueryHandler,
 ContextTypes
 )
 
-BOT_TOKEN = “8680855478:AAGJFbu6B_Q7AZNMl5-3BDO9GWBAPiNYna4”
+BOT_TOKEN = "8680855478:AAGJFbu6B_Q7AZNMl5-3BDO9GWBAPiNYna4"
 ADMIN_ID = 8480843841
 API_KEY = “0c0c1ad20573b309924dd3d7b1bc3e62”
 API_URL = “https://v3.football.api-sports.io”
